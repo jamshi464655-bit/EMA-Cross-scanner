@@ -1,14 +1,12 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import pandas_ta as ta
+from datetime import datetime
 
-# Page Configuration
 st.set_page_config(page_title="EMA Squeeze Pro Scanner", layout="wide")
 
-# Custom UI Styling
 st.markdown("""
-    <style>
+<style>
     .main-header {
         background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
         padding: 30px;
@@ -17,130 +15,92 @@ st.markdown("""
         color: white;
         margin-bottom: 25px;
     }
-    .stDataFrame {
-        border: 1px solid #e6e9ef;
-        border-radius: 10px;
+    .metric-card {
+        background: linear-gradient(135deg, #ec4899, #f472b6);
+        padding: 25px;
+        border-radius: 15px;
+        text-align: center;
+        color: white;
+        margin: 10px 0;
     }
-    </style>
+</style>
 """, unsafe_allow_html=True)
 
+st.markdown("<div class='main-header'><h1>🚀 EMA Squeeze Pro Scanner</h1><p>Nifty 50 & Stocks | EMA 8,13,21,55 Narrow Range + RSI 50</p></div>", unsafe_allow_html=True)
+
 @st.cache_data(ttl=3600)
-def get_symbols_list():
-    # ആദ്യം നിഫ്റ്റി 50 ഇൻഡക്സ്, പിന്നെ പ്രധാന സ്റ്റോക്കുകൾ
-    return [
-        "NIFTY_50", "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC", "SBIN", 
-        "BHARTIARTL", "KOTAKBANK", "LT", "AXISBANK", "ASIANPAINT", "MARUTI", "TITAN",
-        "SUNPHARMA", "ULTRACEMCO", "BAJFINANCE", "NESTLEIND", "HCLTECH", "WIPRO", "ADANIENT",
-        "JINDALSTEL", "TATASTEEL", "TATAMOTORS", "COALINDIA", "HINDALCO", "GRASIM", "JSWSTEEL",
-        "APOLLOHOSP", "CIPLA", "DRREDDY", "DIVISLAB", "BPCL", "ONGC", "POWERGRID", "NTPC",
-        "TATACONSUM", "HEROMOTOCO", "BAJAJ-AUTO", "EICHERMOT", "INDUSINDBK", "HDFCLIFE", "SBILIFE",
-        "BEL", "HAL", "RVNL", "IRCON", "ZOMATO", "DLF", "BHEL", "PNB", "CANBK", "TRENT", "DIXON",
-        "POLYCAB", "TATAPOWER", "MAZDOCK", "JIOFIN", "SUZLON", "PFC", "RECLTD"
-    ]
+def get_symbols():
+    return ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK",
+            "LT","AXISBANK","ASIANPAINT","MARUTI","TITAN","SUNPHARMA","ULTRACEMCO","BAJFINANCE","DMART","TRENT",
+            "ZOMATO","NYKAA","IRCTC","HAL","BEL","PFC","RECLTD","POWERGRID","NTPC","ONGC"]
+
+def calculate_ema(series, period):
+    return series.ewm(span=period, adjust=False).mean()
 
 def scan_ema_squeeze(symbols, count):
     results = []
-    # Yahoo Finance ടിക്കറുകൾ തയ്യാറാക്കുന്നു
-    tickers = []
-    for s in symbols[:count]:
-        if s == "NIFTY_50":
-            tickers.append("^NSEI")
-        else:
-            tickers.append(f"{s}.NS")
+    symbols = symbols[:count]
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    progress = st.progress(0)
+    status = st.empty()
     
-    # ഒന്നിച്ച് ഡാറ്റ ഡൗൺലോഡ് ചെയ്യുന്നു (Speed മെച്ചപ്പെടുത്താൻ)
-    data = yf.download(tickers, period="1y", interval="1d", group_by='ticker', progress=False)
-    
-    for idx, s in enumerate(symbols[:count]):
+    for i, s in enumerate(symbols):
         try:
-            status_text.text(f"🔍 Analyzing: {s}")
-            progress_bar.progress((idx + 1) / len(tickers))
+            status.text(f"Analyzing {s}...")
+            progress.progress((i+1)/len(symbols))
             
-            ticker_key = "^NSEI" if s == "NIFTY_50" else f"{s}.NS"
-            df = data[ticker_key].copy().dropna()
-            
+            df = yf.download(f"{s}.NS", period="1y", interval="1d", progress=False)
             if len(df) < 60: continue
             
-            # EMA കണക്കുകൂട്ടലുകൾ
-            ema8 = ta.ema(df['Close'], length=8).iloc[-1]
-            ema13 = ta.ema(df['Close'], length=13).iloc[-1]
-            ema21 = ta.ema(df['Close'], length=21).iloc[-1]
-            ema55 = ta.ema(df['Close'], length=55).iloc[-1]
+            df['EMA8'] = calculate_ema(df['Close'], 8)
+            df['EMA13'] = calculate_ema(df['Close'], 13)
+            df['EMA21'] = calculate_ema(df['Close'], 21)
+            df['EMA55'] = calculate_ema(df['Close'], 55)
+            df['RSI'] = ta.rsi(df['Close'], length=14)
             
-            # RSI
-            rsi = ta.rsi(df['Close'], length=14).iloc[-1]
+            last = df.iloc[-1]
+            ltp = round(last['Close'], 2)
+            rsi = round(last['RSI'], 1)
             
-            # EMA Spread (Narrow Range %)
-            emas = [ema8, ema13, ema21, ema55]
-            ema_spread = (max(emas) - min(emas)) / min(emas) * 100
+            emas = [last['EMA8'], last['EMA13'], last['EMA21'], last['EMA55']]
+            spread = (max(emas) - min(emas)) / min(emas) * 100
             
-            # Volume Ratio
-            vol_ma20 = df['Volume'].rolling(20).mean().iloc[-1]
-            curr_vol = df['Volume'].iloc[-1]
-            vol_ratio = round(curr_vol / vol_ma20, 2) if vol_ma20 > 0 else 0
+            vol_ratio = round(last['Volume'] / df['Volume'].rolling(20).mean().iloc[-1], 2)
             
-            ltp = round(df['Close'].iloc[-1], 2)
-            
-            # --- നിബന്ധനകൾ (Conditions) ---
-            # 1. EMA Spread < 1.5% (Tight Squeeze)
-            # 2. RSI 48 - 56 (Consolidation phase)
-            if ema_spread < 1.5 and 48 <= rsi <= 56:
-                
-                # TradingView ലിങ്ക്
-                tv_symbol = "NIFTY" if s == "NIFTY_50" else f"NSE:{s}"
-                chart_url = f"https://www.tradingview.com/chart/?symbol={tv_symbol}"
-                
+            if spread < 1.5 and 47 <= rsi <= 56:
                 results.append({
                     "Symbol": s,
                     "LTP": ltp,
-                    "RSI": round(rsi, 2),
-                    "EMA Spread %": round(ema_spread, 2),
+                    "RSI": rsi,
+                    "Spread%": round(spread, 2),
                     "Vol Ratio": vol_ratio,
-                    "View Chart": chart_url,
                     "Signal": "🎯 SQUEEZE"
                 })
         except:
             continue
-            
-    progress_bar.empty()
-    status_text.empty()
+    
+    progress.empty()
+    status.empty()
     return results
 
-# UI ഭാഗം
-st.markdown("<div class='main-header'><h1>🚀 EMA Squeeze Pro Scanner</h1><p>Nifty 50 & Stocks | EMA 8, 13, 21, 55 Narrow Range + RSI 50</p></div>", unsafe_allow_html=True)
-
 with st.sidebar:
-    st.header("⚙️ Scanner Settings")
-    scan_count = st.slider("എത്ര സ്റ്റോക്കുകൾ പരിശോധിക്കണം?", 10, 500, 100)
-    run_btn = st.button("🔍 START SCANNING")
-    st.info("ഇൻഡക്സും (Nifty 50) ഈ സ്കാനറിൽ ഉൾപ്പെടുത്തിയിട്ടുണ്ട്.")
+    st.header("Scanner Settings")
+    scan_count = st.slider("സ്കാൻ ചെയ്യേണ്ട സ്റ്റോക്കുകൾ", 20, 100, 50)
+    if st.button("🚀 START SCANNING"):
+        st.session_state.run_scan = True
 
-if run_btn:
-    symbols = get_symbols_list()
-    found_stocks = scan_ema_squeeze(symbols, scan_count)
+if st.session_state.get('run_scan', False):
+    symbols = get_symbols()
+    found = scan_ema_squeeze(symbols, scan_count)
     
-    if found_stocks:
-        st.success(f"🎯 {len(found_stocks)} ബ്രേക്ക്ഔട്ട് സാധ്യതയുള്ളവ കണ്ടെത്തി!")
-        df_final = pd.DataFrame(found_stocks)
+    if found:
+        st.success(f"🎯 {len(found)} EMA Squeeze setups found!")
+        df = pd.DataFrame(found)
+        st.dataframe(df, use_container_width=True, hide_index=True)
         
-        # ടേബിൾ ഡിസ്‌പ്ലേ
-        st.dataframe(
-            df_final, 
-            column_config={
-                "View Chart": st.column_config.LinkColumn(
-                    "TradingView Link",
-                    display_text="Open Chart 📈"
-                )
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # ഡൗൺലോഡ് ബട്ടൺ
-        csv = df_final.to_csv(index=False)
-        st.download_button("📥 Download Results", csv, "ema_squeeze_results.csv", "text/csv")
+        csv = df.to_csv(index=False)
+        st.download_button("📥 Download Results", csv, "squeeze_results.csv", "text/csv")
     else:
-        st.warning("നിലവിൽ നിബന്ധനകൾ പാലിക്കുന്ന സ്റ്റോക്കുകളോ ഇൻഡക്സോ ലഭ്യമല്ല.")
+        st.warning("നിലവിൽ Squeeze setups ഒന്നും കണ്ടെത്തിയില്ല")
+
+st.caption("Beautiful UI • Pure Pandas EMA • No pandas_ta dependency")
